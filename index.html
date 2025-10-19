@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OKLCH Random Walk — Minimal</title>
+  <style>
+    :root { --bg: #0b0b0c; --fg: #e6e6e6; --muted: #9aa0a6; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+    header { display: grid; gap: .5rem 1rem; grid-template-columns: repeat(8, minmax(0,1fr)); align-items: center; padding: .6rem .8rem; border-bottom: 1px solid #1c1f23; background: #101114; position: sticky; top: 0; z-index: 1; }
+    header label { display: contents; }
+    header .lbl { color: var(--muted); font-size: 12px; }
+    header .stat { font-size: 13px; font-weight: 600; color: #e5e7eb; }
+    header input[type="number"] { width: 100%; padding: .25rem .3rem; background: #0f1216; color: var(--fg); border: 1px solid #24272c; border-radius: 6px; }
+    header input[type="range"] { width: 100%; }
+    header button { padding: .4rem .6rem; background: #171a1f; color: var(--fg); border: 1px solid #2a2e35; border-radius: 8px; cursor: pointer; }
+    header button:hover { background: #1b1f25; }
+    .row { display: contents; }
+    .canvas-wrap { position: relative; display: grid; place-items: stretch; }
+    #view { width: 100%; height: 100%; display: block; background: #000; }
+    .hint { position: absolute; right: 8px; bottom: 8px; color: #cbd5e1; font-size: 11px; opacity: .7; background: rgba(0,0,0,.35); padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <!-- Speed -->
+      <div class="row">
+        <div class="lbl" id="spsLbl" title="How many steps to draw per second. Higher = faster (more pixels)."><strong>Speed</strong> (steps/sec): 60000</div>
+        <input id="sps" type="range" min="100" max="150000" step="100" value="60000" />
+      </div>
+
+      <!-- Movement -->
+      <div class="row">
+        <div class="lbl" title="Horizontal movement per step, in pixels."><strong>Move X</strong> (px/step)</div>
+        <input id="stepX" type="number" min="0" step="0.1" value="1.3" />
+      </div>
+      <div class="row">
+        <div class="lbl" title="Vertical movement per step, in pixels."><strong>Move Y</strong> (px/step)</div>
+        <input id="stepY" type="number" min="0" step="0.1" value="1.3" />
+      </div>
+
+      <!-- Color change per step -->
+      <div class="row">
+        <div class="lbl" title="Lightness change per step (0–100 bounces)."><strong>Lightness</strong> Δ per step</div>
+        <input id="stepL" type="number" min="0" step="0.1" value="0.5" />
+      </div>
+      <div class="row">
+        <div class="lbl" title="Colorfulness (chroma) change per step; bounces between 0 and Max chroma."><strong>Colorfulness</strong> (Chroma) Δ per step</div>
+        <input id="stepC" type="number" min="0" step="0.005" value="0.02" />
+      </div>
+      <div class="row">
+        <div class="lbl" title="Hue change per step, in degrees (wraps around 0–360)."><strong>Hue</strong> Δ (degrees/step)</div>
+        <input id="stepH" type="number" min="0" step="0.5" value="3" />
+      </div>
+      <div class="row">
+        <div class="lbl" title="Upper limit for colorfulness. Higher values = more intense colors (may go out of sRGB on some displays)."><strong>Max chroma</strong></div>
+        <input id="cmax" type="number" min="0" step="0.01" value="0.25" />
+      </div>
+
+      <!-- Rendering + Randomness -->
+      <div class="row">
+        <div class="lbl" title="Size of each painted dot in pixels."><strong>Dot size</strong> (px)</div>
+        <input id="dot" type="number" min="1" step="1" value="1" />
+      </div>
+      <div class="row">
+        <div class="lbl" title="Seed for the random generator. Use the same seed to reproduce a pattern."><strong>Random seed</strong></div>
+        <input id="seed" type="number" step="1" value="0" />
+      </div>
+
+      <!-- Controls -->
+      <div class="row">
+        <button id="play">⏸︎ Pause</button>
+      </div>
+      <div class="row">
+        <button id="clear" title="Clear the canvas and reset the step counter.">🧹 Clear</button>
+      </div>
+      <div class="row">
+        <button id="reseed" title="Pick a new seed without clearing the canvas.">🎲 Reseed</button>
+      </div>
+
+      <!-- Counter -->
+      <div class="row">
+        <div class="lbl">Steps drawn</div>
+        <div id="steps" class="stat">0</div>
+      </div>
+    </header>
+
+    <div class="canvas-wrap">
+      <canvas id="view"></canvas>
+      <div class="hint">OKLCH random walk — torus wrap (x,y); bounce (L,C); hue wrap</div>
+    </div>
+  </div>
+
+  <script>
+  (function() {
+    'use strict';
+
+    // ------- DOM -------
+    const canvas = document.getElementById('view');
+    const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+
+    const $ = (id) => document.getElementById(id);
+    const spsEl = $('sps');
+    const spsLbl = $('spsLbl');
+    const stepXEl = $('stepX');
+    const stepYEl = $('stepY');
+    const stepLEl = $('stepL');
+    const stepCEl = $('stepC');
+    const stepHEl = $('stepH');
+    const cmaxEl = $('cmax');
+    const dotEl = $('dot');
+    const seedEl = $('seed');
+    const playBtn = $('play');
+    const clearBtn = $('clear');
+    const reseedBtn = $('reseed');
+    const stepsOut = $('steps');
+
+    // ------- Config & State -------
+    const CFG = {
+      stepsPerSec: +spsEl.value,
+      stepX: +stepXEl.value,
+      stepY: +stepYEl.value,
+      stepL: +stepLEl.value,
+      stepC: +stepCEl.value,
+      stepH: +stepHEl.value,
+      Cmax: +cmaxEl.value,
+      dot: (+dotEl.value)|0,
+      play: true
+    };
+
+    const S = new Float32Array(5); // [x, y, L, C, H]
+    let totalSteps = 0;
+
+    // ------- RNG: xorshift32 (fast, tiny) -------
+    function makeRNG(seed) {
+      let x = (seed >>> 0) || (Date.now() ^ 0x9E3779B9);
+      return function() {
+        x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+        return ((x >>> 0) / 4294967296); // [0,1)
+      };
+    }
+    let rng = makeRNG(+seedEl.value || 0);
+
+    // ------- Helpers -------
+    function wrapTorus(v, max) { v %= max; return v < 0 ? v + max : v; }
+    function wrap360(h) { h %= 360; return h < 0 ? h + 360 : h; }
+    function bounce(v, lo, hi) {
+      if (v < lo) v = lo + (lo - v);
+      if (v > hi) v = hi - (v - hi);
+      if (v < lo) v = lo; if (v > hi) v = hi; // clamp in rare huge-step cases
+      return v;
+    }
+
+    // ------- Canvas sizing -------
+    let W = 0, Hgt = 0; // device pixels
+    function resizeCanvas() {
+      const ratio = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      const w = Math.max(1, Math.floor(rect.width * ratio));
+      const h = Math.max(1, Math.floor(rect.height * ratio));
+      if (w === canvas.width && h === canvas.height) return;
+      canvas.width = w; canvas.height = h;
+      W = w; Hgt = h;
+      S[0] = W * 0.5; S[1] = Hgt * 0.5;
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, W, Hgt);
+      totalSteps = 0; stepsOut.textContent = '0';
+    }
+    if (!canvas.style.height) canvas.style.height = 'calc(100vh - 52px)';
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // ------- Init walker state -------
+    function resetState(keepColor) {
+      S[0] = W * 0.5; // x
+      S[1] = Hgt * 0.5; // y
+      if (!keepColor) { S[2] = 70; S[3] = 0.12; S[4] = 180; }
+    }
+    resetState(false);
+
+    // ------- Hot loop (step + draw) -------
+    const MAX_STEPS_PER_FRAME = 250000; // safety cap
+    let last = performance.now();
+    let accSteps = 0; // fractional steps accumulator
+
+    function stepAndDraw() {
+      const stepX = CFG.stepX, stepY = CFG.stepY, stepL = CFG.stepL, stepC = CFG.stepC, stepH = CFG.stepH;
+      const Cmax = CFG.Cmax; const dot = CFG.dot|0;
+
+      const dx = (rng()*2 - 1) * stepX;
+      const dy = (rng()*2 - 1) * stepY;
+      const dL = (rng()*2 - 1) * stepL;
+      const dC = (rng()*2 - 1) * stepC;
+      const dH = (rng()*2 - 1) * stepH;
+
+      S[0] = wrapTorus(S[0] + dx, W);
+      S[1] = wrapTorus(S[1] + dy, Hgt);
+      S[2] = bounce(S[2] + dL, 0, 100);
+      S[3] = bounce(S[3] + dC, 0, Cmax);
+      S[4] = wrap360(S[4] + dH);
+
+      const ix = S[0] | 0; const iy = S[1] | 0;
+      ctx.fillStyle = `oklch(${S[2]}% ${S[3]} ${S[4]}deg)`;
+      ctx.fillRect(ix, iy, dot, dot);
+    }
+
+    function loop(now) {
+      const dt = now - last; last = now;
+      if (CFG.play) {
+        accSteps += (dt * CFG.stepsPerSec) / 1000;
+        let n = accSteps | 0; // integer part
+        if (n > MAX_STEPS_PER_FRAME) n = MAX_STEPS_PER_FRAME;
+        accSteps -= n;
+        if (n > 0) {
+          for (let i = 0; i < n; i++) stepAndDraw();
+          totalSteps += n;
+          stepsOut.textContent = totalSteps.toLocaleString();
+        }
+      }
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+    // ------- UI wiring -------
+    spsEl.addEventListener('input', () => {
+      CFG.stepsPerSec = +spsEl.value;
+      spsLbl.innerHTML = `<strong>Speed</strong> (steps/sec): ${spsEl.value}`;
+    });
+    stepXEl.addEventListener('input', () => { CFG.stepX = +stepXEl.value; });
+    stepYEl.addEventListener('input', () => { CFG.stepY = +stepYEl.value; });
+    stepLEl.addEventListener('input', () => { CFG.stepL = +stepLEl.value; });
+    stepCEl.addEventListener('input', () => { CFG.stepC = +stepCEl.value; });
+    stepHEl.addEventListener('input', () => { CFG.stepH = +stepHEl.value; });
+    cmaxEl.addEventListener('input', () => { CFG.Cmax = +cmaxEl.value; });
+    dotEl.addEventListener('input', () => { CFG.dot = (+dotEl.value)|0; });
+
+    playBtn.addEventListener('click', () => {
+      CFG.play = !CFG.play;
+      playBtn.textContent = CFG.play ? '⏸︎ Pause' : '▶︎ Play';
+    });
+
+    clearBtn.addEventListener('click', () => {
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, W, Hgt);
+      resetState(true); // keep current color state
+      totalSteps = 0; stepsOut.textContent = '0';
+    });
+
+    reseedBtn.addEventListener('click', () => {
+      const seedVal = (+seedEl.value) || (Date.now() & 0xffffffff);
+      seedEl.value = String(seedVal);
+      rng = makeRNG(seedVal);
+    });
+
+    if ((+seedEl.value) === 0) seedEl.value = String(Date.now() & 0xffffffff);
+    rng = makeRNG(+seedEl.value);
+  })();
+  </script>
+</body>
+</html>
